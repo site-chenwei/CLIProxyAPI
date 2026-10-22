@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -808,15 +809,23 @@ func (h *Host) callResponseNormalizer(ctx context.Context, record capabilityReco
 			ok = false
 		}
 	}()
-	resp, errNormalizeResponse := normalizer.NormalizeResponse(ctx, pluginapi.ResponseTransformRequest{
-		FromFormat:        from.String(),
-		ToFormat:          to.String(),
-		Model:             model,
-		Stream:            stream,
-		OriginalRequest:   bytes.Clone(originalRequestRawJSON),
-		TranslatedRequest: bytes.Clone(requestRawJSON),
-		Body:              bytes.Clone(body),
-	})
+	req := pluginapi.ResponseTransformRequest{
+		FromFormat: from.String(),
+		ToFormat:   to.String(),
+		Model:      model,
+		Stream:     stream,
+		Body:       bytes.Clone(body),
+	}
+	if record.plugin.Capabilities.ResponseNormalizerOmitRequestBody {
+		req.RequestedModel = model
+		if requested := ojson.GetBytes(originalRequestRawJSON, "model"); requested.Type == ojson.String && requested.Str != "" {
+			req.RequestedModel = requested.Str
+		}
+	} else {
+		req.OriginalRequest = bytes.Clone(originalRequestRawJSON)
+		req.TranslatedRequest = bytes.Clone(requestRawJSON)
+	}
+	resp, errNormalizeResponse := normalizer.NormalizeResponse(ctx, req)
 	if errNormalizeResponse != nil || len(resp.Body) == 0 {
 		return nil, false
 	}
