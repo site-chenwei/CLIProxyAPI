@@ -593,6 +593,7 @@ type preparedExecutorCall struct {
 	requestedFormat sdktranslator.Format
 	inputFormat     sdktranslator.Format
 	outputFormat    sdktranslator.Format
+	requestedModel  string
 }
 
 func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts coreexecutor.Options) (preparedExecutorCall, error) {
@@ -692,6 +693,7 @@ func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts cor
 		requestedFormat: requestedFormat,
 		inputFormat:     inputFormat,
 		outputFormat:    outputFormat,
+		requestedModel:  resolveRequestedModel(opts.OriginalRequest, req.Payload, nativeReq.Model),
 	}, nil
 }
 
@@ -829,6 +831,7 @@ func executorNativeStreamResponseTranslatorExists(from, to sdktranslator.Format)
 }
 
 func (a *executorAdapter) translateExecutorResponse(ctx context.Context, prepared preparedExecutorCall, payload []byte, stream bool, param *any) []byte {
+	ctx = withRequestedModel(ctx, prepared.requestedModel)
 	if prepared.requestedFormat == "" || prepared.outputFormat == prepared.requestedFormat {
 		out := bytes.Clone(payload)
 		if prepared.requestedFormat == sdktranslator.FormatOpenAIResponse {
@@ -889,6 +892,7 @@ func (a *executorAdapter) translateExecutorStreamChunks(ctx context.Context, pre
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = withRequestedModel(ctx, prepared.requestedModel)
 	if sameFormat && sdktranslator.HasStreamResponseTransformer(prepared.outputFormat, prepared.requestedFormat) {
 		in = deframeExecutorSSEChunks(ctx, in)
 	}
@@ -1021,7 +1025,7 @@ func (a *executorAdapter) Execute(ctx context.Context, auth *coreauth.Auth, req 
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequestWithPolicy(a.host, a.provider, auth, prepared.req, prepared.opts, executorRequestNeedsClone(a.executor)))
 	if errExecute != nil {
 		return coreexecutor.Response{}, errExecute
 	}
@@ -1079,7 +1083,7 @@ func (a *executorAdapter) ExecuteStream(ctx context.Context, auth *coreauth.Auth
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequestWithPolicy(a.host, a.provider, auth, prepared.req, prepared.opts, executorRequestNeedsClone(a.executor)))
 	if errExecuteStream != nil {
 		return nil, errExecuteStream
 	}
@@ -1305,7 +1309,7 @@ func (a *executorAdapter) CountTokens(ctx context.Context, auth *coreauth.Auth, 
 	if errPrepare != nil {
 		return coreexecutor.Response{}, errPrepare
 	}
-	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildExecutorRequestWithPolicy(a.host, a.provider, auth, prepared.req, prepared.opts, executorRequestNeedsClone(a.executor)))
 	if errCountTokens != nil {
 		return coreexecutor.Response{}, errCountTokens
 	}
@@ -1403,6 +1407,16 @@ func (a *executorAdapter) HttpRequest(ctx context.Context, auth *coreauth.Auth, 
 }
 
 func buildExecutorRequest(host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) pluginapi.ExecutorRequest {
+	return buildExecutorRequestWithPolicy(host, provider, auth, req, opts, true)
+}
+
+func buildExecutorRequestWithPolicy(host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, cloneRequest bool) pluginapi.ExecutorRequest {
+	originalRequest := opts.OriginalRequest
+	payload := req.Payload
+	if cloneRequest {
+		originalRequest = bytes.Clone(originalRequest)
+		payload = bytes.Clone(payload)
+	}
 	return pluginapi.ExecutorRequest{
 		AuthID:          authID(auth),
 		AuthProvider:    authProvider(auth),
@@ -1412,14 +1426,26 @@ func buildExecutorRequest(host *Host, provider string, auth *coreauth.Auth, req 
 		Alt:             opts.Alt,
 		Headers:         cloneHeader(opts.Headers),
 		Query:           cloneValues(opts.Query),
-		OriginalRequest: bytes.Clone(opts.OriginalRequest),
+		OriginalRequest: originalRequest,
 		SourceFormat:    opts.SourceFormat.String(),
-		Payload:         bytes.Clone(req.Payload),
+		Payload:         payload,
 		Metadata:        mergeExecutorMetadata(req.Metadata, opts.Metadata),
 		StorageJSON:     storageJSONFromAuth(auth),
 		AuthMetadata:    cloneAnyMap(authMetadata(auth)),
 		AuthAttributes:  authAttributes(auth),
 		HTTPClient:      host.newHTTPClientWithProxy(auth, opts.ProxyURL, provider),
+	}
+}
+
+// executorRequestNeedsClone reports whether the executor may mutate the request
+// slices in place. RPC executors serialize ExecutorRequest before handing it to
+// the plugin, so the host can avoid copying large request bodies for them.
+func executorRequestNeedsClone(executor pluginapi.ProviderExecutor) bool {
+	switch executor.(type) {
+	case rpcProviderExecutor, *rpcProviderExecutor:
+		return false
+	default:
+		return true
 	}
 }
 

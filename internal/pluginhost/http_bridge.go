@@ -153,12 +153,13 @@ func (c *hostHTTPClient) doHTTP(ctx context.Context, req pluginapi.HTTPRequest) 
 	if method == "" {
 		method = http.MethodGet
 	}
-	httpReq, errNewRequest := http.NewRequestWithContext(ctx, method, req.URL, bytes.NewReader(bytes.Clone(req.Body)))
+	body := bytes.Clone(req.Body)
+	httpReq, errNewRequest := http.NewRequestWithContext(ctx, method, req.URL, bytes.NewReader(body))
 	if errNewRequest != nil {
 		return nil, cfg, nil, fmt.Errorf("create host http request: %w", errNewRequest)
 	}
 	httpReq.Header = cloneHeader(req.Headers)
-	c.recordHTTPRequest(ctx, cfg, httpReq, req.Body)
+	c.recordHTTPRequest(ctx, cfg, httpReq, body)
 	client, cleanup, errClient := c.newHTTPClientForRequest(ctx, cfg, req, httpReq)
 	if errClient != nil {
 		return nil, cfg, nil, errClient
@@ -192,11 +193,13 @@ func (c *hostHTTPClient) recordHTTPRequest(ctx context.Context, cfg *config.Conf
 			provider = c.auth.Provider
 		}
 	}
-	helps.RecordAPIRequest(ctx, cfg, helps.UpstreamRequestLog{
+	// body is the host-owned request copy created by Do, so it is stable for
+	// the request lifetime and can be retained without another full copy.
+	helps.RecordAPIRequestImmutableBody(ctx, cfg, helps.UpstreamRequestLog{
 		URL:       req.URL.String(),
 		Method:    req.Method,
 		Headers:   req.Header.Clone(),
-		Body:      bytes.Clone(body),
+		Body:      body,
 		Provider:  provider,
 		AuthID:    authID,
 		AuthLabel: authLabel,

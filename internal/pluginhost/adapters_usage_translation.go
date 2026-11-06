@@ -710,7 +710,9 @@ func (h *Host) TranslateRequest(ctx context.Context, from, to sdktranslator.Form
 }
 
 func (h *Host) NormalizeResponseBefore(ctx context.Context, from, to sdktranslator.Format, model string, originalRequestRawJSON, requestRawJSON, body []byte, stream bool) []byte {
-	current := bytes.Clone(body)
+	// callResponseNormalizer isolates the body before invoking a plugin, so an
+	// initial clone here would only duplicate the streaming chunk copy.
+	current := body
 	for _, record := range h.activeRecords() {
 		normalizer := record.plugin.Capabilities.ResponseBeforeTranslator
 		if h.isPluginFused(record.id) || normalizer == nil {
@@ -737,7 +739,9 @@ func (h *Host) TranslateResponse(ctx context.Context, from, to sdktranslator.For
 }
 
 func (h *Host) NormalizeResponseAfter(ctx context.Context, from, to sdktranslator.Format, model string, originalRequestRawJSON, requestRawJSON, body []byte, stream bool) []byte {
-	current := bytes.Clone(body)
+	// callResponseNormalizer isolates the body before invoking a plugin, so an
+	// initial clone here would only duplicate the streaming chunk copy.
+	current := body
 	for _, record := range h.activeRecords() {
 		normalizer := record.plugin.Capabilities.ResponseAfterTranslator
 		if h.isPluginFused(record.id) || normalizer == nil {
@@ -817,9 +821,12 @@ func (h *Host) callResponseNormalizer(ctx context.Context, record capabilityReco
 		Body:       bytes.Clone(body),
 	}
 	if record.plugin.Capabilities.ResponseNormalizerOmitRequestBody {
-		req.RequestedModel = model
-		if requested := ojson.GetBytes(originalRequestRawJSON, "model"); requested.Type == ojson.String && requested.Str != "" {
-			req.RequestedModel = requested.Str
+		req.RequestedModel = requestedModelFromContext(ctx)
+		if req.RequestedModel == "" {
+			req.RequestedModel = model
+			if requested := ojson.GetBytes(originalRequestRawJSON, "model"); requested.Type == ojson.String && requested.Str != "" {
+				req.RequestedModel = requested.Str
+			}
 		}
 	} else {
 		req.OriginalRequest = bytes.Clone(originalRequestRawJSON)
