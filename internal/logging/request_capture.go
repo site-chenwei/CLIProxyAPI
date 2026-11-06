@@ -188,7 +188,16 @@ func (c *DeferredAPICapture) IsClosed() bool {
 // RecordRequest stores a deferred upstream request builder within MaxDeferredAPIRequestBodyBytes
 // and opens the paired upstream response attempt slot.
 func (c *DeferredAPICapture) RecordRequest(body []byte, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool) {
-	return c.recordRequest(body, false, build)
+	return c.recordRequest(body, false, false, build)
+}
+
+// RecordImmutableRequestBody stores a deferred upstream request whose body the caller
+// guarantees immutable for the request's lifetime. When the whole body fits within the
+// remaining budget and its capacity does not exceed it, the body is retained without
+// copying and its capacity is charged to the budget. Otherwise it falls back to a
+// bounded snapshot like RecordRequest.
+func (c *DeferredAPICapture) RecordImmutableRequestBody(body []byte, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool) {
+	return c.recordRequest(body, false, true, build)
 }
 
 // RecordOrReplacePendingRequest replaces the trailing request builder when its paired
@@ -196,16 +205,16 @@ func (c *DeferredAPICapture) RecordRequest(body []byte, build func(index int, ca
 // request is immediately rejected during its HTTP upgrade handshake), or appends a new
 // request attempt otherwise.
 func (c *DeferredAPICapture) RecordOrReplacePendingRequest(body []byte, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool, bool) {
-	fn, bytesUsed, replaced, ok := c.recordRequestWithReplace(body, true, build)
+	fn, bytesUsed, replaced, ok := c.recordRequestWithReplace(body, true, false, build)
 	return fn, bytesUsed, replaced, ok
 }
 
-func (c *DeferredAPICapture) recordRequest(body []byte, replacePending bool, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool) {
-	fn, bytesUsed, _, ok := c.recordRequestWithReplace(body, replacePending, build)
+func (c *DeferredAPICapture) recordRequest(body []byte, replacePending, immutable bool, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool) {
+	fn, bytesUsed, _, ok := c.recordRequestWithReplace(body, replacePending, immutable, build)
 	return fn, bytesUsed, ok
 }
 
-func (c *DeferredAPICapture) recordRequestWithReplace(body []byte, replacePending bool, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool, bool) {
+func (c *DeferredAPICapture) recordRequestWithReplace(body []byte, replacePending, immutable bool, build func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) DeferredAPIRequest) (DeferredAPIRequest, int, bool, bool) {
 	if c == nil || build == nil {
 		return nil, 0, false, false
 	}
@@ -254,13 +263,21 @@ func (c *DeferredAPICapture) recordRequestWithReplace(body []byte, replacePendin
 	if captureLength > remaining {
 		captureLength = remaining
 	}
-	capturedBody := bytes.Clone(body[:captureLength])
+	retainedBytes := captureLength
+	var capturedBody []byte
+	if immutable && captureLength > 0 && captureLength == len(body) && cap(body) <= remaining {
+		capturedBody = body
+		// Charge the retained capacity, including spare space, to the same budget.
+		retainedBytes = cap(body)
+	} else {
+		capturedBody = bytes.Clone(body[:captureLength])
+	}
 	bodyEmpty := len(body) == 0
 	bodyTruncated := captureLength < len(body)
-	c.requestBytes += captureLength
+	c.requestBytes += retainedBytes
 	fn := build(index, capturedAt, capturedBody, bodyEmpty, bodyTruncated)
 	c.requests = append(c.requests, fn)
-	c.startAttemptLocked(index, captureLength)
+	c.startAttemptLocked(index, retainedBytes)
 	return fn, c.requestBytes, false, true
 }
 

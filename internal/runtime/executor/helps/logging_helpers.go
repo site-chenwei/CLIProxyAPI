@@ -65,6 +65,18 @@ func requestLogCaptureEnabled(cfg *config.Config) bool {
 
 // RecordAPIRequest stores the upstream request metadata in Gin context for request logging.
 func RecordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	recordAPIRequest(ctx, cfg, info, false)
+}
+
+// RecordAPIRequestImmutableBody records a finalized request without copying its body
+// for deferred logging. The caller must keep the body immutable for the request's
+// lifetime. Truncated captures still copy their prefix to avoid retaining a larger
+// backing buffer. RecordAPIRequest retains snapshot semantics for general callers.
+func RecordAPIRequestImmutableBody(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	recordAPIRequest(ctx, cfg, info, true)
+}
+
+func recordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog, immutableBody bool) {
 	if cfg == nil || cfg.CommercialMode {
 		return
 	}
@@ -74,14 +86,14 @@ func RecordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequ
 			return
 		}
 		if capture := logging.DeferredAPICaptureFromContext(ctx); capture != nil {
-			deferAPIRequestToCapture(capture, info)
+			deferAPIRequestToCapture(capture, info, immutableBody)
 			return
 		}
 		ginCtx := ginContextFrom(ctx)
 		if ginCtx == nil {
 			return
 		}
-		deferAPIRequest(ginCtx, info)
+		deferAPIRequest(ginCtx, info, immutableBody)
 		return
 	}
 	ginCtx := ginContextFrom(ctx)
@@ -157,11 +169,15 @@ func buildDeferredAPIRequestCallback(capturedInfo UpstreamRequestLog, index int,
 	}
 }
 
-func deferAPIRequestToCapture(capture *logging.DeferredAPICapture, info UpstreamRequestLog) (logging.DeferredAPIRequest, int, bool) {
+func deferAPIRequestToCapture(capture *logging.DeferredAPICapture, info UpstreamRequestLog, immutableBody bool) (logging.DeferredAPIRequest, int, bool) {
 	capturedInfo := info
-	return capture.RecordRequest(info.Body, func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) logging.DeferredAPIRequest {
+	build := func(index int, capturedAt time.Time, capturedBody []byte, bodyEmpty, bodyTruncated bool) logging.DeferredAPIRequest {
 		return buildDeferredAPIRequestCallback(capturedInfo, index, capturedAt, capturedBody, bodyEmpty, bodyTruncated)
-	})
+	}
+	if immutableBody {
+		return capture.RecordImmutableRequestBody(info.Body, build)
+	}
+	return capture.RecordRequest(info.Body, build)
 }
 
 func deferOrReplacePendingAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
@@ -199,12 +215,12 @@ func deferOrReplacePendingAPIRequest(ctx context.Context, cfg *config.Config, in
 	ginCtx.Set(logging.DeferredAPIRequestContextKey, requests)
 }
 
-func deferAPIRequest(ginCtx *gin.Context, info UpstreamRequestLog) {
+func deferAPIRequest(ginCtx *gin.Context, info UpstreamRequestLog, immutableBody bool) {
 	if ginCtx == nil {
 		return
 	}
 	capture := deferredResponseCaptureFrom(ginCtx)
-	fn, bytesUsed, ok := deferAPIRequestToCapture(capture, info)
+	fn, bytesUsed, ok := deferAPIRequestToCapture(capture, info, immutableBody)
 	if !ok {
 		return
 	}

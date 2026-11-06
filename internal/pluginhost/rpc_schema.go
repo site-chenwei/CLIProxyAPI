@@ -49,7 +49,9 @@ type rpcCapabilities struct {
 	ResponseAfterTranslator           bool                         `json:"response_after_translator"`
 	ResponseNormalizerOmitRequestBody bool                         `json:"response_normalizer_omit_request_body,omitempty"`
 	ResponseInterceptor               bool                         `json:"response_interceptor"`
+	ResponseInterceptorOmitRequest    bool                         `json:"response_interceptor_omit_request_body,omitempty"`
 	StreamChunkInterceptor            bool                         `json:"response_stream_interceptor"`
+	StreamChunkInterceptorOmitRequest bool                         `json:"response_stream_interceptor_omit_request_body,omitempty"`
 	WebSocketResponseObserver         bool                         `json:"websocket_response_observer"`
 	ThinkingApplier                   bool                         `json:"thinking_applier"`
 	UsagePlugin                       bool                         `json:"usage_plugin"`
@@ -257,7 +259,9 @@ func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 		ResponseAfterTranslator:           caps.ResponseAfterTranslator != nil,
 		ResponseNormalizerOmitRequestBody: caps.ResponseNormalizerOmitRequestBody,
 		ResponseInterceptor:               caps.ResponseInterceptor != nil,
+		ResponseInterceptorOmitRequest:    caps.ResponseInterceptor != nil && caps.ResponseInterceptorOmitRequestBody,
 		StreamChunkInterceptor:            caps.StreamChunkInterceptor != nil,
+		StreamChunkInterceptorOmitRequest: caps.StreamChunkInterceptor != nil && caps.StreamChunkInterceptorOmitRequestBody,
 		WebSocketResponseObserver:         caps.WebSocketResponseObserver != nil,
 		ThinkingApplier:                   caps.ThinkingApplier != nil,
 		UsagePlugin:                       caps.UsagePlugin != nil,
