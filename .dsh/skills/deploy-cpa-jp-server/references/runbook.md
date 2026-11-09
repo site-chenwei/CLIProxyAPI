@@ -158,11 +158,12 @@ REMOTE
 Expected: the container is `Up`, `RestartCount=0`, the version log matches `<VERSION>` and
 `<SHORT>`, the two hashes match, `models=401` without an API key, and `panel=200`.
 
-## 8. Clean old images
+## 8. Clean old images and build dirs
 
 Cleanup runs only after every check in §7 passes. Delete every old
-`site-chenwei/cliproxyapi` image, keeping only the version currently running. No backups are
-kept.
+`site-chenwei/cliproxyapi` image, every `/root/cpa-build-*` build directory (including the
+one used for this deployment), and every uploaded `/root/CLIProxyAPI-*.tar.gz` archive;
+only the version currently running is kept. No backups are kept.
 
 ```bash
 "${SSH[@]}" 'bash -s' <<'REMOTE'
@@ -174,6 +175,8 @@ for img in $(docker images --format '{{.Repository}}:{{.Tag}}' --filter 'referen
     docker rmi "$img"
   fi
 done
+rm -rf /root/cpa-build-*
+rm -f /root/CLIProxyAPI-*.tar.gz
 docker image prune -f
 docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=site-chenwei/cliproxyapi:*'
 REMOTE

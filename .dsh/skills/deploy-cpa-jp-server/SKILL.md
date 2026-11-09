@@ -34,8 +34,8 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
 - `server-update --only cpa` does not detect an image tag change in `.env` for local images.
   Switch tags with `docker compose up -d --no-deps cli-proxy-api`, then verify.
 - Never keep deployment backups: do not copy the old binary, Dockerfile, README, or `.env`.
-  After verification passes, delete every old `site-chenwei/cliproxyapi` image and keep only
-  the current running image.
+  After verification passes, delete every old `site-chenwei/cliproxyapi` image and every
+  `/root/cpa-build-*` build directory, keeping only the current running image.
 - Push to the remote only when the user explicitly asks. After a rebase, use
   `git push --force-with-lease`; never plain force push.
 
@@ -57,8 +57,9 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
    `docker compose up -d --no-deps cli-proxy-api`. See runbook §6.
 7. **Verify** — image, restart count, version log, plugin load, binary hash, panel health,
    and API auth probe. See runbook §7.
-8. **Clean old images** — after verification passes, delete every old
-   `site-chenwei/cliproxyapi` image and keep only the current one. No backups are kept.
+8. **Clean old images and build dirs** — after verification passes, delete every old
+   `site-chenwei/cliproxyapi` image, every `/root/cpa-build-*` build directory, uploaded
+   `/root/CLIProxyAPI-*.tar.gz` archives, and all backup files. No backups are kept.
    See runbook §8.
 
 ## Verification checklist
@@ -72,7 +73,8 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
 - [ ] `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8317/v1/models` returns
       `401` (no key was sent; this proves the auth middleware is serving).
 - [ ] `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18317/health` returns `200`.
-- [ ] Only the current `site-chenwei/cliproxyapi` image remains after cleanup (runbook §8).
+- [ ] Only the current `site-chenwei/cliproxyapi` image remains; no `/root/cpa-build-*`
+      build directories or `/root/CLIProxyAPI-*.tar.gz` source archives remain (runbook §8).
 
 ## Rollback
 

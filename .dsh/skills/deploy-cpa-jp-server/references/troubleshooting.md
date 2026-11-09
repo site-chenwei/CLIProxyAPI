@@ -63,6 +63,7 @@ service is alive and auth is enforced.
 
 ## Disk pressure
 
-Every successful deployment deletes all old `site-chenwei/cliproxyapi` images automatically
-(runbook §8); only the current image remains. Check with `df -h /` and `docker system df`.
-Never remove `eceasy/cli-proxy-api:latest` or the current image.
+Every successful deployment deletes all old `site-chenwei/cliproxyapi` images, every
+`/root/cpa-build-*` build directory, and uploaded `/root/CLIProxyAPI-*.tar.gz` archives
+automatically (runbook §8); only the current image remains. Check with `df -h /` and
+`docker system df`. Never remove `eceasy/cli-proxy-api:latest` or the current image.
