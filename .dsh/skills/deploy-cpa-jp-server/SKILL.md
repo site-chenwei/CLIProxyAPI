@@ -1,6 +1,6 @@
 ---
 name: deploy-cpa-jp-server
-description: Deploy or roll back CLIProxyAPI (CPA) on the Japan 1C1G server, including release rebase, linux/amd64 build, local patch image rebuild, Compose switch, verification, old-image cleanup, and rollback. Use when the user asks to deploy this repository to the Japan server, publish a new CPA release there, or roll back the server deployment.
+description: Deploy or roll back CLIProxyAPI (CPA) on the Japan 1C1G server, including release rebase, linux/amd64 build, local patch image rebuild, Compose switch, verification, build-artifact cleanup, and rollback. Use when the user asks to deploy this repository to the Japan server, publish a new CPA release there, or roll back the server deployment.
 whenToUse: The user says "部署到服务器" / "deploy to the Japan server" for this repository, or asks to upgrade, publish, or roll back the server's CPA release.
 ---
 
@@ -33,9 +33,12 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
   `site.1`; rebuilding the same release increments `N`.
 - `server-update --only cpa` does not detect an image tag change in `.env` for local images.
   Switch tags with `docker compose up -d --no-deps cli-proxy-api`, then verify.
-- Never keep deployment backups: do not copy the old binary, Dockerfile, README, or `.env`.
-  After verification passes, delete every old `site-chenwei/cliproxyapi` image and every
-  `/root/cpa-build-*` build directory, keeping only the current running image.
+- Never keep deployment backups or build artifacts: do not copy the old binary, Dockerfile,
+  README, or `.env`. After verification passes, delete every old `site-chenwei/cliproxyapi`
+  image, every `/root/cpa-build-*` / `/root/cpa-out*` build directory, `/root/.debug`,
+  `/root/.cache/go-build`, uploaded `/root/CLIProxyAPI-*.tar.gz` archives, freetier plugin
+  build outputs, and the Docker build cache. Only the current running image and
+  `eceasy/cli-proxy-api:latest` are kept.
 - Push to the remote only when the user explicitly asks. After a rebase, use
   `git push --force-with-lease`; never plain force push.
 
@@ -57,10 +60,11 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
    `docker compose up -d --no-deps cli-proxy-api`. See runbook §6.
 7. **Verify** — image, restart count, version log, plugin load, binary hash, panel health,
    and API auth probe. See runbook §7.
-8. **Clean old images and build dirs** — after verification passes, delete every old
-   `site-chenwei/cliproxyapi` image, every `/root/cpa-build-*` build directory, uploaded
-   `/root/CLIProxyAPI-*.tar.gz` archives, and all backup files. No backups are kept.
-   See runbook §8.
+8. **Clean all build artifacts** — after verification passes, `server-update --only cpa`
+   automatically deletes every old `site-chenwei/cliproxyapi` image, build tool images,
+   `/root/cpa-build-*` / `/root/cpa-out*` build directories, `/root/.debug`, Go build cache,
+   uploaded source archives, freetier plugin build outputs, and the Docker build cache.
+   No backups are kept. See runbook §8.
 
 ## Verification checklist
 
@@ -73,8 +77,10 @@ The CPA image is a **local patch image**: it has `cpa.local-build=true` and is b
 - [ ] `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8317/v1/models` returns
       `401` (no key was sent; this proves the auth middleware is serving).
 - [ ] `curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18317/health` returns `200`.
-- [ ] Only the current `site-chenwei/cliproxyapi` image remains; no `/root/cpa-build-*`
-      build directories or `/root/CLIProxyAPI-*.tar.gz` source archives remain (runbook §8).
+- [ ] Only the current `site-chenwei/cliproxyapi` image remains; no `/root/cpa-build-*`,
+      `/root/cpa-out*`, `/root/.debug`, `/root/.cache/go-build`, or
+      `/root/CLIProxyAPI-*.tar.gz` build artifacts remain; `docker builder du` is empty
+      (runbook §8).
 
 ## Rollback
 

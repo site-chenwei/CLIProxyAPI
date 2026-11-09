@@ -64,8 +64,9 @@ The local and remote SHA-256 must match before building.
 
 ## 4. Build the linux/amd64 binary on the server
 
-The server has the cached `golang:1.26-bookworm` image; no apt install is needed. The first
-build downloads Go modules and can take several minutes.
+The build uses the `golang:1.26-bookworm` image; if `server-update` has already cleaned it,
+Docker pulls it automatically. The first build downloads Go modules and can take several
+minutes.
 
 ```bash
 "${SSH[@]}" "SHORT=${SHORT} VERSION=${VERSION} bash -s" <<'REMOTE'
@@ -158,12 +159,16 @@ REMOTE
 Expected: the container is `Up`, `RestartCount=0`, the version log matches `<VERSION>` and
 `<SHORT>`, the two hashes match, `models=401` without an API key, and `panel=200`.
 
-## 8. Clean old images and build dirs
+## 8. Clean all build artifacts
 
-Cleanup runs only after every check in §7 passes. Delete every old
-`site-chenwei/cliproxyapi` image, every `/root/cpa-build-*` build directory (including the
-one used for this deployment), and every uploaded `/root/CLIProxyAPI-*.tar.gz` archive;
-only the version currently running is kept. No backups are kept.
+Cleanup runs only after every check in §7 passes. `server-update --only cpa` performs this
+cleanup automatically; after a manual deployment run it, or run the commands below. Delete
+every old `site-chenwei/cliproxyapi` image, every `/root/cpa-build-*` / `/root/cpa-out*`
+build directory (including the one used for this deployment), `/root/.debug`,
+`/root/.cache/go-build`, every uploaded `/root/CLIProxyAPI-*.tar.gz` archive, freetier plugin
+build outputs, and the Docker build cache; only the version currently running is kept. No
+backups are kept. `eceasy/cli-proxy-api:latest` is the local image base and must never be
+removed.
 
 ```bash
 "${SSH[@]}" 'bash -s' <<'REMOTE'
@@ -175,8 +180,12 @@ for img in $(docker images --format '{{.Repository}}:{{.Tag}}' --filter 'referen
     docker rmi "$img"
   fi
 done
-rm -rf /root/cpa-build-*
-rm -f /root/CLIProxyAPI-*.tar.gz
+rm -rf /root/cpa-build-* /root/cpa-out* /root/.debug /root/.cache/go-build /root/freetier-build-*
+rm -f /root/CLIProxyAPI-*.tar.gz /root/freetier-src-*.tgz /root/freetier-v*.so /root/freetier-v*.h
+for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^(golang|alpine):' || true); do
+  docker rmi "$img"
+done
+docker builder prune -a -f
 docker image prune -f
 docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=site-chenwei/cliproxyapi:*'
 REMOTE
