@@ -36,10 +36,12 @@ docker pull eceasy/cli-proxy-api:latest
 1. Inspect `docker logs --tail 100 cpamp-cli-proxy-api-1`.
 2. Check that `cliproxyapi/config.yaml` exists and is valid YAML.
 3. Check that the plugin directory still contains compatible `linux/amd64` plugins.
-4. If the cause is not obvious, roll back with the newest `.env.bak-*` file (runbook §8) and
-   report the failure.
+4. If the cause is not obvious and the previous image is still present, set `CPA_IMAGE` back
+   to the previous tag, run `docker compose up -d --no-deps cli-proxy-api`, and report the
+   failure (runbook §9).
 
-Do not delete the previous image tag; it is the rollback target.
+Old images are deleted automatically after verification (runbook §8); until then the previous
+tag remains available for rollback.
 
 ## Version or label mismatch
 
@@ -61,6 +63,6 @@ service is alive and auth is enforced.
 
 ## Disk pressure
 
-Old site images accumulate for rollback. Check with `df -h /` and `docker system df`.
-After a deployment has been stable, old `site-chenwei/cliproxyapi:vX.Y.Z-site.N` images may
-be removed manually, but never remove `eceasy/cli-proxy-api:latest` or the current image.
+Every successful deployment deletes all old `site-chenwei/cliproxyapi` images automatically
+(runbook §8); only the current image remains. Check with `df -h /` and `docker system df`.
+Never remove `eceasy/cli-proxy-api:latest` or the current image.

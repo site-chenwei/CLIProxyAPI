@@ -23,8 +23,7 @@ cd /Users/bill/WorkSpace/CLIProxyAPI
 git status --short --branch          # must be clean
 git fetch upstream --tags --prune
 
-TAG=v8.0.59                          # set the requested release tag
-git branch "backup/site-normalizer-omit-body-pre-${TAG}" HEAD 2>/dev/null || true
+TAG=v8.0.61                          # set the requested release tag
 git rebase "$TAG"                    # keep the branch linear; resolve conflicts before continuing
 
 go build -o test-output ./cmd/server && rm -f test-output
@@ -97,12 +96,8 @@ The resulting binary must be `ELF 64-bit LSB executable, x86-64`.
 set -euo pipefail
 cd /opt/cpa-manager-plus/local-build
 
-STAMP="$(date +%Y%m%d-%H%M%S)"
-cp -a CLIProxyAPI "CLIProxyAPI.bak-${STAMP}"
 install -m 755 "/root/cpa-build-${SHORT}/CLIProxyAPI-${SHORT}/CLIProxyAPI" ./CLIProxyAPI
 
-cp -a Dockerfile "Dockerfile.bak-${STAMP}"
-cp -a README.md "README.md.bak-${STAMP}"
 sed -i \
   "s/cpa.upstream-version=\"[^\"]*\"/cpa.upstream-version=\"${BASE_TAG}\"/; s/cpa.patch-commit=\"[^\"]*\"/cpa.patch-commit=\"${SHORT}\"/" \
   Dockerfile
@@ -124,8 +119,7 @@ base image.
 set -euo pipefail
 cd /opt/cpa-manager-plus
 
-STAMP="$(date +%Y%m%d-%H%M%S)"
-cp -a .env ".env.bak-${STAMP}"
+echo "previous: $(grep '^CPA_IMAGE=' .env)"
 sed -i "s|^CPA_IMAGE=.*|CPA_IMAGE=site-chenwei/cliproxyapi:${VERSION}|" .env
 grep '^CPA_IMAGE=' .env
 
@@ -164,19 +158,33 @@ REMOTE
 Expected: the container is `Up`, `RestartCount=0`, the version log matches `<VERSION>` and
 `<SHORT>`, the two hashes match, `models=401` without an API key, and `panel=200`.
 
-## 8. Rollback
+## 8. Clean old images
+
+Cleanup runs only after every check in §7 passes. Delete every old
+`site-chenwei/cliproxyapi` image, keeping only the version currently running. No backups are
+kept.
 
 ```bash
 "${SSH[@]}" 'bash -s' <<'REMOTE'
 set -euo pipefail
-cd /opt/cpa-manager-plus
-BACKUP="$(ls -1t .env.bak-* | head -1)"
-echo "Restoring $BACKUP"
-cp -a "$BACKUP" .env
-docker compose up -d --no-deps cli-proxy-api
-docker compose ps
+CURRENT="$(docker inspect cpamp-cli-proxy-api-1 --format '{{.Config.Image}}')"
+echo "keeping ${CURRENT}"
+for img in $(docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=site-chenwei/cliproxyapi:*'); do
+  if [ "$img" != "$CURRENT" ]; then
+    docker rmi "$img"
+  fi
+done
+docker image prune -f
+docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=site-chenwei/cliproxyapi:*'
 REMOTE
 ```
 
-The previous image tag and binary backups are kept in `/opt/cpa-manager-plus/local-build/`.
-Confirm `docker compose ps` and the startup log show the previous version.
+## 9. Rollback
+
+No image, binary, Dockerfile, README, or `.env` backups are kept. If verification fails
+before §8, the previous image still exists: set `CPA_IMAGE` back to the previous tag and run
+`docker compose up -d --no-deps cli-proxy-api`, then confirm the old version in
+`docker compose ps` and the startup logs.
+
+To roll back after a successful deployment, rebuild the previous version from its git commit
+with §1–§5, then switch to the rebuilt tag with §6.
