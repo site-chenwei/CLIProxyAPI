@@ -1,10 +1,10 @@
 # Deployment runbook
 
 All commands are for bash from the repository root on the local machine. Run them in
-order and stop at the first failure. `<TAG>` is the upstream release tag such as `v8.0.59`;
-`<VERSION>` is the deployed image tag such as `v8.0.59-site.1`.
+order and stop at the first failure. `<TAG>` is the upstream release tag such as `v8.0.66`;
+`<VERSION>` is the deployed image tag such as `v8.0.66-site.1`.
 
-Export the connection variables once per shell. Read the secret file only now:
+Export the connection variables once per shell. Read the secret file only now (Stage C):
 
 ```bash
 SECRET="$HOME/.dsh/secrets/jp-1c1g-server.md"
@@ -16,27 +16,69 @@ SSH=(ssh -i "$SSH_KEY" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=12 "$SS
 SCP=(scp -i "$SSH_KEY" -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=12)
 ```
 
-## 1. Prepare the local branch
+## 1. Determine the target release and merge it into the patch branch
 
 ```bash
 cd /Users/bill/WorkSpace/CLIProxyAPI
 git status --short --branch          # must be clean
 git fetch upstream --tags --prune
 
-TAG=v8.0.61                          # set the requested release tag
-git rebase "$TAG"                    # keep the branch linear; resolve conflicts before continuing
+# The target is the newest vX.Y.Z tag; it MUST equal upstream/main's tip.
+TAG="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+echo "$TAG"
+git rev-parse "refs/tags/$TAG"
+git rev-parse upstream/main          # the two hashes must be identical
 
+git branch "backup/site-normalizer-omit-body-pre-$TAG"   # pre-rebase snapshot for rollback
+git rebase "$TAG"                    # keep the branch linear; resolve conflicts per below
+```
+
+Conflict playbook — rebuild from upstream, never hand-stitch conflict markers:
+
+- During the rebase `HEAD` is the new upstream base. For a conflicting file, start from the
+  clean upstream version and re-apply only the fork's hunks:
+  ```bash
+  git show HEAD:<path> > <path>
+  # re-apply the fork change on the new architecture, then:
+  git add <path>
+  GIT_EDITOR=true git rebase --continue
+  ```
+- Classify each fork hunk: **(a)** upstream has since absorbed it → drop it; **(b)** still
+  orthogonal → re-apply verbatim; **(c)** built on an API upstream has refactored → port the
+  behavior onto the new API and update any coupled tests.
+- Worked example (v8.0.66): upstream moved deferred request capture into
+  `logging.DeferredAPICapture`; the fork's immutable-body optimization became a new
+  `RecordImmutableRequestBody` method in `internal/logging/request_capture.go`, threaded through
+  `internal/runtime/executor/helps/logging_helpers.go`, and
+  `internal/runtime/executor/helps/logging_immutable_body_test.go` was rewritten to the new
+  budget model (`MaxDeferredAPIRequestBodyBytes = 32 << 20`).
+- If a fork patch genuinely cannot map onto the new upstream design, stop and report it instead
+  of inventing a resolution.
+
+Verify the merge — every check must pass before pushing or deploying:
+
+```bash
+git merge-base --is-ancestor "$TAG" HEAD    # tag is an ancestor of HEAD
+git rev-list --count "$TAG"..HEAD           # equals the number of fork commits on top
+git grep -n '^<<<<<<< \|^>>>>>>> ' -- '*.go' || true    # no conflict markers
+gofmt -l $(git diff --name-only "$TAG"..HEAD -- '*.go') # empty
 go build -o test-output ./cmd/server && rm -f test-output
 go test ./internal/pluginhost/... ./internal/runtime/executor/... ./internal/translator/...
 ```
 
-Do not deploy a half-rebased tree. If a conflict is unavoidable, report it instead of
-inventing a merge resolution.
+Do not deploy a half-rebased tree.
 
-## 2. Push the branch (only when requested)
+## 2. Push the rebased branch
+
+A rebase rewrites the fork branch, so it must be force-pushed — but only with a lease, and only
+after confirming the remote ref still equals the tracking ref you last fetched. If the two differ,
+someone else pushed: fetch and reconcile instead of overwriting.
 
 ```bash
+git rev-parse "origin/site/normalizer-omit-body"
+git ls-remote origin refs/heads/site/normalizer-omit-body   # must equal the line above
 git push --force-with-lease origin site/normalizer-omit-body
+git ls-remote origin refs/heads/site/normalizer-omit-body   # must equal local HEAD
 ```
 
 Never use plain `--force`; the lease protects against overwriting someone else's push.
@@ -45,7 +87,7 @@ Never use plain `--force`; the lease protects against overwriting someone else's
 
 ```bash
 SHORT="$(git rev-parse --short=8 HEAD)"
-BASE_TAG="$(git describe --tags --abbrev=0)"   # e.g. v8.0.59
+BASE_TAG="$(git describe --tags --abbrev=0)"   # upstream release, e.g. v8.0.66
 
 # New BASE_TAG starts at site.1. For a rebuild, use the next unused N:
 "${SSH[@]}" "docker images --format '{{.Repository}}:{{.Tag}}' | grep '^site-chenwei/cliproxyapi:${BASE_TAG}-site\\.' | sort -V | tail -1"
@@ -193,10 +235,12 @@ REMOTE
 
 ## 9. Rollback
 
-No image, binary, Dockerfile, README, or `.env` backups are kept. If verification fails
-before §8, the previous image still exists: set `CPA_IMAGE` back to the previous tag and run
-`docker compose up -d --no-deps cli-proxy-api`, then confirm the old version in
-`docker compose ps` and the startup logs.
+No image, binary, Dockerfile, README, or `.env` backups are kept on the server.
 
-To roll back after a successful deployment, rebuild the previous version from its git commit
-with §1–§5, then switch to the rebuilt tag with §6.
+- **Fork branch / merge**: the local backup branch `backup/site-normalizer-omit-body-pre-<TAG>`
+  restores the pre-rebase tree (`git reset --hard` it, or re-push it with `--force-with-lease`).
+- **Verification failed before §8**: the previous image still exists — set `CPA_IMAGE` back to
+  the previous tag, run `docker compose up -d --no-deps cli-proxy-api`, then confirm the old
+  version in `docker compose ps` and the startup logs.
+- **Roll back after a successful deployment**: rebuild the previous version from its git commit
+  with §3–§5, then switch to the rebuilt tag with §6.

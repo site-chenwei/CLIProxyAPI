@@ -1,5 +1,30 @@
 # Troubleshooting and rollback notes
 
+## Rebase conflict in an area the fork patched (Stage A)
+
+The rebase onto a new upstream release usually conflicts only where the fork's own commits touch
+code upstream has since refactored. Do not hand-edit conflict markers and do not drop the fork
+patch to make the conflict go away.
+
+1. Snapshot first: `git branch backup/site-normalizer-omit-body-pre-<TAG>` before `git rebase`.
+2. Take the clean upstream file — during the rebase `HEAD` is the new base:
+   `git show HEAD:<path> > <path>`.
+3. Re-apply only the fork's hunks on the new architecture. Classify each hunk: upstream already
+   absorbed it (drop), still orthogonal (re-apply verbatim), or built on a refactored API (port the
+   behavior onto the new API).
+4. Update coupled tests. Example from v8.0.66: upstream moved deferred request capture into
+   `logging.DeferredAPICapture`; the fork's immutable-body optimization was re-implemented as
+   `RecordImmutableRequestBody` in `internal/logging/request_capture.go`, threaded through
+   `internal/runtime/executor/helps/logging_helpers.go`, and
+   `internal/runtime/executor/helps/logging_immutable_body_test.go` was rewritten to the new
+   budget model (`MaxDeferredAPIRequestBodyBytes = 32 << 20`).
+5. `git add <path>` then `GIT_EDITOR=true git rebase --continue`. Finish with green `gofmt -l`,
+   `go build ./cmd/server`, and the targeted tests. Confirm `<TAG>` is an ancestor of HEAD and
+   `git rev-list --count <TAG>..HEAD` equals the fork's commit count (runbook §1).
+
+If a fork patch cannot map onto the new upstream design at all, stop and report it — never invent
+a resolution or silently drop the patch.
+
 ## `server-update --only cpa` says "镜像 digest 未变"
 
 Known behavior: for local patch images (`cpa.local-build=true`) the registry check is
